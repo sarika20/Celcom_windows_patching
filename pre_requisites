@@ -1,0 +1,214 @@
+
+I) There are two ways to setup remote connection in window host:
+    A) Using winrm
+    B) Setup need to be done in Ansible Server if we are using Winrm:
+            i) Install pywinrm
+            ii) Inventory creation 
+
+    B) Using Open SSH
+       i) create inventory:
+
+#-------------------------------------------------- USING WINRM -------------------------------------------------------------------------------:
+
+1 . Port Requirement: 5985 , 5986 should be open
+
+2 . Upgrading PowerShell and .NET Framework:
+            Run in PowerShell :
+                A)  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    $url = "https://raw.githubusercontent.com/jborean93/ansible-windows/master/scripts/Upgrade-PowerShell.ps1"
+                    $file = "$env:temp\Upgrade-PowerShell.ps1"
+                    $username = "Administrator"
+                    $password = "Password"
+
+                    (New-Object -TypeName System.Net.WebClient).DownloadFile($url, $file)
+                    Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Force
+
+                B)  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Force
+                    $reg_winlogon_path = "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon"
+                    Set-ItemProperty -Path $reg_winlogon_path -Name AutoAdminLogon -Value 0
+                    Remove-ItemProperty -Path $reg_winlogon_path -Name DefaultUserName -ErrorAction SilentlyContinue
+                    Remove-ItemProperty -Path $reg_winlogon_path -Name DefaultPassword -ErrorAction SilentlyContinue
+                    # Version can be 3.0, 4.0 or 5.1
+                    &$file -Version 5.1 -Username $username -Password $password -Verbose
+
+3 . WinRM Setup :
+            For Basic/credssp authentication protocol Run in Powershell:
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                $url = "https://raw.githubusercontent.com/ansible/ansible/devel/examples/scripts/ConfigureRemotingForAnsible.ps1"
+                $file = "$env:temp\ConfigureRemotingForAnsible.ps1"
+                (New-Object -TypeName System.Net.WebClient).DownloadFile($url, $file)
+                powershell.exe -ExecutionPolicy ByPass -File $file
+
+                Set-Item -Path WSMan:\localhost\Service\Auth\Basic -Value $true
+
+                Set-Item -Path WSMan:\localhost\Service\Auth\CredSSP -Value $true
+
+                Enable-WSManCredSSP -Role Server -Force
+
+
+
+                #-------------------------- Run following Cmd in Powershell to avoid Errors---------------------
+                
+                winrm set winrm/config/client/auth '@{Basic="true"}'
+                winrm set winrm/config/service/auth '@{Basic="true"}'
+
+                Set-Item -Path WSMan:\localhost\Service\Auth\Basic -Value $true
+
+                winrm set winrm/config/service/auth '@{Basic="true"}'
+                winrm set winrm/config/service '@{AllowUnencrypted="true"}'
+
+                #---------------------------------------------------------------------------------------------------
+
+4 . Check WinRM Listener :
+            A)  winrm enumerate winrm/config/Listener
+
+5 . WinRM Service Options :
+            A)  winrm get winrm/config/Service
+            B)  winrm get winrm/config/Winrs
+            C) Service\AllowUnencrypted: should be "true" if we use Basic protocol use for remote connectivity
+
+6 . Common WinRM Issues:
+            A)  # Test out HTTP
+                winrs -r:http://server:5985/wsman -u:Username -p:Password ipconfig
+
+                # Test out HTTPS (will fail if the cert is not verifiable)
+                winrs -r:https://server:5986/wsman -u:Username -p:Password -ssl ipconfig
+
+                # Test out HTTPS, ignoring certificate verification
+                $username = "Username"
+                $password = ConvertTo-SecureString -String "Password" -AsPlainText -Force
+                $cred = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $username, $password
+
+                $session_option = New-PSSessionOption -SkipCACheck -SkipCNCheck -SkipRevocationCheck
+                Invoke-Command -ComputerName server -UseSSL -ScriptBlock { ipconfig } -Credential $cred -SessionOption $session_option
+            
+            B) HTTP 401/Credentials Rejected:
+                A HTTP 401 error indicates the authentication process failed during the initial connection. Some things to check for this are:
+
+                Verify that the credentials are correct and set properly in your inventory with ansible_user and ansible_password
+
+                Ensure that the user is a member of the local Administrators group or has been explicitly granted access (a connection test with the winrs command can be used to rule this out).
+
+                Make sure that the authentication option set by ansible_winrm_transport is enabled under Service\Auth\*
+
+                If running over HTTP and not HTTPS, use ntlm, kerberos or credssp with ansible_winrm_message_encryption: auto to enable message encryption. If using another authentication option or if the installed pywinrm version cannot be upgraded, the Service\AllowUnencrypted can be set to true but this is only recommended for troubleshooting
+
+                Ensure the downstream packages pywinrm, requests-ntlm, requests-kerberos, and/or requests-credssp are up to date using pip.
+
+                If using Kerberos authentication, ensure that Service\Auth\CbtHardeningLevel is not set to Strict.
+
+                When using Basic or Certificate authentication, make sure that the user is a local account and not a domain account. Domain accounts do not work with Basic and Certificate authentication.
+
+            C) HTTP 500 Error:
+                These indicate an error has occurred with the WinRM service. Some things to check for include:
+
+                Verify that the number of current open shells has not exceeded either WinRsMaxShellsPerUser or any of the other Winrs quotas havent been exceeded.
+
+            D) Timeout Errors:
+                These usually indicate an error with the network connection where Ansible is unable to reach the host. Some things to check for include:
+
+                Make sure the firewall is not set to block the configured WinRM listener ports
+
+                Ensure that a WinRM listener is enabled on the port and path set by the host vars
+
+                Ensure that the winrm service is running on the Windows host and configured for automatic start
+
+            E) Connection Refused Errors:
+                These usually indicate an error when trying to communicate with the WinRM service on the host. Some things to check for:
+
+                Ensure that the WinRM service is up and running on the host. Use (Get-Service -Name winrm).Status to get the status of the service.
+
+                Check that the host firewall is allowing traffic over the WinRM port. By default this is 5985 for HTTP and 5986 for HTTPS.
+
+                Sometimes an installer may restart the WinRM or HTTP service and cause this error. The best way to deal with this is to use win_psexec from another Windows host
+
+#--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+#--------------------------Setup need to be done in Ansible Server if we are using Winrm-------------------------------
+
+i) Install pywinrm: 
+       pip install "pywinrm>=0.3.0"
+
+ii) Inventory creation:
+       Create file inventory.yaml with following variables:
+
+            [winhost]
+            add ips
+
+            [winhost;vars]
+            ansible_user: LocalUsername
+            ansible_password: Password
+            ansible_connection: winrm
+            ansible_winrm_transport: basic
+            ansible_winrm_scheme=https
+            ansible_port=5986
+            ansible_winrm_server_cert_validation: ignore
+
+#---------------------------------------OPTIONAL iF WE ARE using "CREDSSP" rather than "BASIC"---------------------------------------------
+i) Installing CredSSP Library
+        The requests-credssp wrapper can be installed using pip:
+
+        pip install pywinrm[credssp]
+
+ii ) Inventory
+        [winhost]
+        add ips
+
+        [winhost;vars]
+        ansible_user: LocalUsername
+        ansible_password: Password
+        ansible_connection: winrm
+        ansible_winrm_transport: credssp
+        ansible_winrm_scheme=https
+        ansible_port=5986
+        ansible_winrm_server_cert_validation: ignore
+
+#==================================================================================================================================================
+#==================================================================================================================================================
+# -------------------------------------------------- USING OPEN SSH: --------------------------------------------------------------------------------------------------------------------------
+
+1 . Port Requirement: 22 should be open
+
+2. Download the latest build of OpenSSH. To get links to latest downloads.
+    Run Following cmd in powershell (Administrator):
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $url = 'https://github.com/PowerShell/Win32-OpenSSH/releases/latest/'
+        $request = [System.Net.WebRequest]::Create($url)
+        $request.AllowAutoRedirect=$false
+        $response=$request.GetResponse()
+        $([String]$response.GetResponseHeader("Location")).Replace('tag','download') + '/OpenSSH-Win64.zip'  
+        $([String]$response.GetResponseHeader("Location")).Replace('tag','download') + '/OpenSSH-Win32.zip'
+
+3 . Extract contents of the latest build to "C:\Program Files\OpenSSH" (Make sure binary location has the Write permissions to just to SYSTEM, Administrator groups. Authenticated users should and only have Read and Execute.)
+     (Rename file if name is not "OpenSSH" only)
+4 . In an elevated Powershell console, run the following : 
+
+        powershell.exe -ExecutionPolicy Bypass -File install-sshd.ps1
+
+5 . Open the firewall for sshd.exe to allow inbound SSH connections
+
+        Note: New-NetFirewallRule is for Windows 2012 and above servers only. If you are on a client desktop machine (like Windows 10) or Windows 2008 R2 and below, try:
+
+        run in powershell : "netsh advfirewall firewall add rule name=sshd dir=in action=allow protocol=TCP localport=22"
+    
+6 . Start sshd (this will automatically generate host keys under %programdata%\ssh if they dont already exist)
+
+        run in powershell : "net start sshd"
+
+7 . To configure a default shell, see here
+
+        To setup sshd service to auto-start
+        run in powershell : "Set-Service sshd -StartupType Automatic"
+
+
+
+#--------------------------------------------- Inventory creation in Ansible Server -----------------------------------------------------------
+
+[winhost]
+add ips
+
+[winhost;vars]
+ansible_user: LocalUsername
+ansible_password: Password
+ansible_connection=ssh
+ansible_shell_type=cmd or powershell
