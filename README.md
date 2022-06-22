@@ -1,2 +1,2 @@
 # Celcom_windows_patching
-windows patching using wsus
+windows patching using wsus credssp
