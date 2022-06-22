@@ -212,3 +212,5 @@ ansible_user: LocalUsername
 ansible_password: Password
 ansible_connection=ssh
 ansible_shell_type=cmd or powershell
+
+#---------------------------------------------------------------------------
